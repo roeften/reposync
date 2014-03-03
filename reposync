@@ -379,7 +379,8 @@ safe_exit() {
         if [ ! -z "$DRYRUN" -a "$DRYRUN" == "yes" ]; then
                 echo "Would safe_exit with status $1"
         else
-		safe_exit $1
+		unlock_instance
+		exit $1
         fi
 }
 
@@ -411,8 +412,3 @@ run_cmd "$SYNC_CMD" "debug"
 save_configuration
 done
 unlock_instance
-#if [ -d /share/CentOS/5.8 ] ; then
-#    rsync  -avSHP --delete --exclude "local*" --exclude "isos" --exclude "xen4" --exclude "centosplus" --exclude "contrib" --exclude "cr" --exclude "fasttrack" --exclude "SCL" ftp.ntua.gr::centos/6.5/ /usr/local/share/CentOS/6.5/
-#else
-#    echo "Target directory /share/CentOS/5.8 not present."
-#fi
