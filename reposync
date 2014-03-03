@@ -1,0 +1,387 @@
+#!/bin/bash
+
+REPOS_PATH=/usr/local/share/repos
+
+
+# these should all go to conf dir
+SYNC_URL=rsync://ftp.ntua.gr::centos
+TARGET_VERSION=6.5 # Auto updated variable. Set only the first time.
+TARGET_NAME=CentOS
+TARGET_ARCH=x86_64 # x86_64 or i386 or empty for both
+TARGET_EXCLUDE=( xen4 centosplus contrib cr fasttrack isos xen4 SCL ) # excluded directories.
+AUTO_UPDATE_POINT_RELEASE=yes # automatically create to point release dir and update symlink to major version.
+DRYRUN=yes # just say what would be done without doing it.
+VERBOSE=yes # print information.
+# reserved for future use; todo; RETAIN_OLD_VERSIONS=0 # If AUTO_UPDATE_POINT_RELEASE is yes, indicates how many older versions to keep, 0 for none.
+# reserved for future use; todo; KEEP_VAULT=no # retain versions which have moved to the vault (depreciated versions).
+# end
+
+
+# Configuration & lock file location. Cannot be overriden in sync files only in $CONFIG_DIR/syncrepo
+REPOS_PATH=/usr/local/share/repos
+LOCKFILE=/var/lock/subsys/reposync
+MAX_VERSION_CHECKS=15
+
+# Configuration location. Cannot be overriden in other place.
+CONFIG_DIR=/etc/reposync.d
+
+
+# To support more protocol schemes the following functions must be defined
+
+# The following function(s) should check using the protocol scheme wether the target version is depriciated.
+# Function name should be is_depreciated_$SCHEME
+
+is_depreciated_rsync() {
+	build_rsync_cmd "dryrun"
+	O=$($SYNC_CMD 2>&1)
+	verbose "$O"
+        if [ ! -z "$O" ]; then
+                local P="$REPOS_PATH/$TARGET_NAME/$TARGET_VERSION/os"
+                if [ -d "$P" ]; then
+			local OS_D=`echo -e "$O" | egrep "^deleting os/$"`
+
+                	if [ -z "$OS_D" ]; then
+                        	return 0;
+                	fi
+		else
+			OS_D=`echo -e "$O" | egrep "^readme|0_Readme$"`
+                        if [ -z "$OS_D" ]; then
+                                return 0;
+                        fi
+		fi
+        fi
+        return 1;
+}
+
+# The following function(s) should set a string variable named SYNC_CMD with the command to run in order to synchronize the target.
+# If the first argument is "dryrun" then the function should always produce a command which will not actually perform the action.
+# Function name should be build_$SCHEME_cmd
+
+build_rsync_cmd() {
+
+	SYNC_CMD="rsync -avSHP --delete"
+        if [ ! -z $1 -a "$1" == "dryrun" ]; then
+		SYNC_CMD="$SYNC_CMD --dry-run"
+        fi
+
+	for e in ${TARGET_EXCLUDE[*]}; do
+		SYNC_CMD="$SYNC_CMD --exclude $e"
+	done;
+
+	case $TARGET_ARCH in
+		i386)
+			SYNC_CMD="$SYNC_CMD --exclude x86_64"
+  			;;
+		x86_64)
+			SYNC_CMD="$SYNC_CMD --exclude i386"
+			;;
+		*)
+  			verbose "Warning: Architecture $TARGET_ARCH seems to be bogus. Will download all available archs."
+  			;;
+	esac
+
+	SYNC_CMD="$SYNC_CMD $URL_COMPONENT$TARGET_VERSION/ $REPOS_PATH/$TARGET_NAME/$TARGET_VERSION/"
+	verbose "Generated $SYNC_CMD"
+	return 0;
+}
+
+
+# end of protocol dependant functions. 
+
+# version dependant functions
+
+next_point_release_CentOS6() {
+	# move rpms from /updates/$ARCH/Packages/ to /os/$ARCH/Packages/
+	next_point_release_CentOS "mv $TARGET_REPO_PATH/updates/\$ARCH/Packages/ $TARGET_REPO_PATH/os/\$ARCH/Packages/"
+}
+
+next_point_release_CentOS5() {
+	 # move rpms from /updates/$ARCH/RPMS/ to /os/$ARCH/RPMS/
+	next_point_release_CentOS "mv $TARGET_REPO_PATH/updates/\$ARCH/RPMS/ $TARGET_REPO_PATH/os/\$ARCH/RPMS/"
+}
+
+# end
+
+# Do not change anything below this line unless you really want to.
+
+if [ -f "$CONFIG_DIR/syncrepo" ]; then
+	source "$CONFIG_DIR/syncrepo"
+fi
+
+next_point_release_CentOS() {
+	local ARCH=
+	local ARCHES=
+        case $TARGET_ARCH in
+                i386)
+                        ARCHES=( i386 )
+                        ;;
+                x86_64)
+                        ARCHES=( x86_64 )
+                        ;;
+                *)
+                         ARCHES=( x86_64 i386 )
+                        ;;
+        esac
+
+	for ARCH in $ARCHES; do
+		run_cmd $1
+	done;
+	
+}
+
+build_sync_cmd() {
+	local CMD="build_${SCHEME}_cmd"
+
+	local ARG=
+        if [ ! -z $1 -a "$1" == "dryrun" ]; then
+		CMD="$CMD $1"
+        elif [ ! -z $DRYRUN -a "$DRYRUN" == "yes" ]; then
+		CMD="$CMD dryrun"
+        fi
+	$CMD
+	return 0;
+}
+
+get_configurations() {
+	shopt -s nullglob
+	CONFIGURATION_FILES=${CONFIG_DIR}/*.sync
+	verbose "Found configuration" $CONFIGURATION_FILES
+#	for f in ${CONFIG_DIR}/*.sync; do echo "Processing $f file.."; done
+#	return 0;
+}
+
+sync_repo() {
+	${SYNC_CMD}
+	return $?;
+}
+
+verbose() {
+	if [ ! -z "$VERBOSE"  -a  "$VERBOSE" == "yes"  ]; then
+		echo -e $1 $2 $3 $4 $5 $6 $7 $8 $9
+	fi
+}
+
+# Check if a current version is depreciated.
+# Returns 1 if version is depreciated or 0 if not.
+
+is_depreciated() {
+ 
+ # check if local repo has readme with keyword depreciated
+ # rsync: check for literal "deleting os/" or "readme"  or "0_Readme" is/are the only file(s) added
+	local CMD="is_depreciated_$SCHEME"
+	${CMD}
+
+	if [ "$?" -eq "0" ]; then
+		verbose "No deletion marker for $SYNC_URL."
+	else
+		verbose "Deletion marker found for $REPOS_PATH/os. Depreciated."
+		return 1;
+	fi
+	return 0;
+}
+
+decode_url() {
+	local I=`expr index "$SYNC_URL" '://'`
+	if [ "$I" -gt 0 ]; then
+		I=`expr $I - 1`
+		SCHEME=${SYNC_URL:0:$I}
+		I=`expr $I + 3`
+		URL_COMPONENT=${SYNC_URL:$I}
+		verbose "Extracted scheme is $SCHEME, component is $URL_COMPONENT"
+		return 0;
+	fi
+
+	verbose "Failed to extract scheme, is SYNC_URL properly set?"
+	safe_exit 2;
+}
+
+next_point_release() {
+	local INT=${TARGET_VERSION/.*}
+	local FLOAT=${TARGET_VERSION/*.}
+	let FLOAT=FLOAT+1
+	NEXT_POINT_RELEASE=$INT.$FLOAT
+	verbose "Calculated next point release $NEXT_POINT_RELEASE"
+}
+
+sanity_check() {
+	TARGET_VERSION=`echo $TARGET_VERSION+0.0 | bc`
+	var_check SYNC_URL
+	var_check TARGET_VERSION
+	dir_check CONFIG_DIR
+	dir_check REPOS_PATH
+	TARGET_REPO_PATH="$REPOS_PATH/$TARGET_NAME/${TARGET_VERSION}"
+	dir_check TARGET_REPO_PATH
+	decode_url
+
+
+	type "is_depreciated_$SCHEME" "build_${SCHEME}_cmd" &> /dev/null 
+
+	if [ "$?" -gt "0" ]; then
+		verbose "Scheme $SCHEME does not seem to be supported right now."
+		safe_exit 1;
+	fi
+}
+
+func_check() {
+	type $1
+	return $?
+}
+
+var_check() {
+        local VAR_NAME=$1
+        local VAR=${!VAR_NAME}
+
+	if [ -z $VAR ]; then
+		verbose "$VAR_NAME is not set. Exiting."
+		safe_exit 5;
+	fi
+}
+
+dir_check() {
+	local VAR_NAME=$1
+	local VAR=${!VAR_NAME}
+	var_check $VAR_NAME
+        if [ ! -d $VAR ]; then
+                verbose "$VAR does not exist. Creating it."
+                mkdir -p $VAR
+
+                if [ "$?" -gt "0" ]; then
+                        verbose "Failed to create $VAR. Exiting."
+                        safe_exit 4;
+                fi
+        fi	
+}
+
+load_defaults() {
+	SYNC_URL=
+	TARGET_VERSION=
+	TARGET_ARCH=x86_64
+	TARGET_EXCLUDE=( xen4 centosplus contrib cr fasttrack isos xen4 SCL ) # excluded directories.
+	AUTO_UPDATE_POINT_RELEASE=yes # automatically create to point release dir and update symlink to major version.
+	DRYRUN=no # just say what would be done without doing it.
+	RETAIN_OLD_VERSIONS=0 # If AUTO_UPDATE_POINT_RELEASE is yes, indicates how many older versions to keep, 0 for none.
+	KEEP_VAULT=no # retain versions which have moved to the vault (depreciated versions).
+}
+
+save_configuration() {
+	verbose "Saving $TARGET_CONFIGURATION_FILE"
+	
+	local O=`echo -e "SYNC_URL=$SYNC_URL\nTARGET_VERSION=$TARGET_VERSION\nTARGET_ARCH=$TARGET_ARCH\nTARGET_EXCLUDE=( ${TARGET_EXCLUDE[*]} )\nAUTO_UPDATE_POINT_RELEASE=$AUTO_UPDATE_POINT_RELEASE\nDRYRUN=$DRYRUN\nRETAIN_OLD_VERSIONS=$RETAIN_OLD_VERSIONS\nKEEP_VAULT=$KEEP_VAULT" > $TARGET_CONFIGURATION_FILE`
+	verbose $O
+	return 0;
+}
+
+array_to_string() {
+	STRING=${echo $1}
+}
+
+unlock_instance() {
+	if [ -f $LOCKFILE ]; then
+		/bin/rm -f $LOCKFILE
+	fi
+}
+
+lock_instance() {
+	if [ -f $LOCKFILE ]; then
+    		echo "reposync is already running."
+    		safe_exit 0
+	fi
+
+	touch $LOCKFILE &>/dev/null
+
+	if [ "$?" -gt "0" ]; then
+		verbose "Could not lock instance."
+		safe_exit 6
+	fi
+}
+
+create_next_release() {
+	next_point_release
+
+	PREVIOUS_TARGET_VERSION=$TARGET_VERSION
+	PREVIOUS_TARGET_REPO_PATH=$TARGET_REPO_PATH
+
+	TARGET_VERSION=$NEXT_POINT_RELEASE
+        TARGET_REPO_PATH=$REPOS_PATH/$TARGET_NAME/$TARGET_VERSION
+
+# do not create it cp -al will dir_check TARGET_REPO_PATH
+	run_cmd "cp -al $PREVIOUS_TARGET_REPO_PATH $TARGET_REPO_PATH"
+
+        if [ "$?" -gt "0" ]; then
+                verbose "Failed to copy previous release."
+                safe_exit 7
+        fi
+
+	local INT=${TARGET_VERSION/.*}
+
+	run_cmd "rm -f $REPOS_PATH/$TARGET_NAME/$INT"
+	run_cmd "ln -s $TARGET_REPO_PATH $REPOS_PATH/$TARGET_NAME/$INT"
+	run_cmd "rm -rf $PREVIOUS_TARGET_REPO_PATH"
+
+
+        type "next_point_release_${TARGET_NAME}$INT" &> /dev/null
+
+        if [ "$?" -gt "0" ]; then
+                verbose "No hook defined for next release on ${TARGET_NAME}$INT."
+                safe_exit 1;
+	else
+		${${TARGET_NAME}$INT}
+        fi
+
+}
+
+run_cmd() {
+	if [ ! -z "$VERBOSE" -a "$VERBOSE" == "yes" ]; then
+		echo "Would execute command: $1"
+	else
+		CMD_OUTPUT=${$1 2>&1 }
+		verbose $CMD_OUTPUT
+	fi
+}
+
+safe_exit() {
+        if [ ! -z "$VERBOSE" -a "$VERBOSE" == "yes" ]; then
+                echo "Would safe_exit with status $1"
+        else
+		safe_exit $1
+        fi
+}
+
+lock_instance
+
+get_configurations
+
+for TARGET_CONFIGURATION_FILE in $CONFIGURATION_FILES; do 
+load_defaults
+source $TARGET_CONFIGURATION_FILE
+verbose  "Repo in $TARGET_CONFIGURATION_FILE"; 
+sanity_check
+LOOP=0
+
+while [ "$LOOP" -lt "$MAX_VERSION_CHECKS" ]; do
+	is_depreciated
+
+	if [ "$?" -eq "0" ]; then
+		LOOP=100
+	else
+		create_next_release
+		let LOOP=LOOP+1 
+	fi
+done
+
+if [ ! -z "$VERBOSE" -a "$VERBOSE" == "yes" ]; then
+	build_sync_cmd "dryrun"
+else
+	build_sync_cmd
+fi
+$SYNC_CMD
+save_configuration
+done
+
+unlock_instance
+
+#if [ -d /share/CentOS/5.8 ] ; then
+#    rsync  -avSHP --delete --exclude "local*" --exclude "isos" --exclude "xen4" --exclude "centosplus" --exclude "contrib" --exclude "cr" --exclude "fasttrack" --exclude "SCL" ftp.ntua.gr::centos/6.5/ /usr/local/share/CentOS/6.5/
+#else
+#    echo "Target directory /share/CentOS/5.8 not present."
+#fi
