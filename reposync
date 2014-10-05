@@ -302,6 +302,13 @@ array_to_string() {
 	STRING=${echo $1}
 }
 
+on_die()
+{
+        verbose "info" "Interrupted"
+        unlock_instance
+        exit
+}
+
 unlock_instance() {
 	if [ -f $LOCKFILE ]; then
 		/bin/rm -f $LOCKFILE
@@ -394,7 +401,7 @@ safe_exit() {
 }
 
 lock_instance
-
+trap 'on_die' INT TERM EXIT
 get_configurations
 
 for TARGET_CONFIGURATION_FILE in $CONFIGURATION_FILES; do 
@@ -421,3 +428,5 @@ run_cmd "$SYNC_CMD" "debug"
 save_configuration
 done
 unlock_instance
+trap - INT TERM EXIT
+
