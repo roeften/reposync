@@ -17,19 +17,21 @@ TARGET_EXCLUDE=( xen4 centosplus contrib cr fasttrack isos xen4 SCL ) # excluded
 # reserved for future use; todo; AUTO_UPDATE_POINT_RELEASE=yes # automatically create to point release dir and update symlink to major version.
 DRYRUN=yes # just say what would be done without doing it.
 VERBOSE=yes # print information.
+#  Repo local path
+REPOS_PATH=/usr/local/share/repos
+
 # reserved for future use; todo; RETAIN_OLD_VERSIONS=0 # If AUTO_UPDATE_POINT_RELEASE is yes, indicates how many older versions to keep, 0 for none.
 # reserved for future use; todo; KEEP_VAULT=no # retain versions which have moved to the vault (depreciated versions).
 # end
 
 
 # Configuration & lock file location. Cannot be overriden in sync files only in $CONFIG_DIR/syncrepo
-REPOS_PATH=/usr/local/share/repos
-LOCKFILE=/var/lock/subsys/reposync
+LOCKFILE=~/.cache/reposync.lock
 # How far to go adding to the minor version before giving up.
 MAX_VERSION_CHECKS=15
 
-# Configuration location. Cannot be overriden in other place.
-CONFIG_DIR=/etc/reposync.d
+# Configuration location. Cannot be overriden in other place. Todo place it in /etc/sysconfig/reposync
+CONFIG_DIR=~/.config/reposync
 
 
 # To support more protocol schemes the following functions must be defined
@@ -86,6 +88,7 @@ build_rsync_cmd() {
   			;;
 	esac
 
+    # this should be built in custom function e.g. build_rsync_cmd_FEDORA or CENTOS5
 	SYNC_CMD="$SYNC_CMD $URL_COMPONENT$TARGET_VERSION/ $REPOS_PATH/$TARGET_NAME/$TARGET_VERSION/"
 	verbose "debug" "Generated $SYNC_CMD"
 	return 0;
@@ -223,7 +226,10 @@ next_point_release() {
 }
 
 sanity_check() {
-	TARGET_VERSION=`echo $TARGET_VERSION+0.0 | bc`
+
+    if [ "HAS_POINT_RELEASE" == "yes" ]; then
+	    TARGET_VERSION=`echo $TARGET_VERSION+0.0 | bc`
+    fi
 	var_check SYNC_URL
 	var_check TARGET_VERSION
 	dir_check CONFIG_DIR
@@ -280,12 +286,14 @@ load_defaults() {
 	DRYRUN=no # just say what would be done without doing it.
 	RETAIN_OLD_VERSIONS=0 # If AUTO_UPDATE_POINT_RELEASE is yes, indicates how many older versions to keep, 0 for none.
 	KEEP_VAULT=no # retain versions which have moved to the vault (depreciated versions).
+    HAS_POINT_RELEASE=yes
+    REPOS_PATH=/usr/local/share/repos
 }
 
 save_configuration() {
 	verbose "debug" "Saving $TARGET_CONFIGURATION_FILE"
 	
-	local O=`echo -e "SYNC_URL=$SYNC_URL\nTARGET_VERSION=$TARGET_VERSION\nTARGET_ARCH=$TARGET_ARCH\nTARGET_EXCLUDE=( ${TARGET_EXCLUDE[*]} )\nAUTO_UPDATE_POINT_RELEASE=$AUTO_UPDATE_POINT_RELEASE\nDRYRUN=$DRYRUN\nRETAIN_OLD_VERSIONS=$RETAIN_OLD_VERSIONS\nKEEP_VAULT=$KEEP_VAULT" > $TARGET_CONFIGURATION_FILE`
+	local O=`echo -e "REPOS_PATH=$REPOS_PATH\nVERBOSE=$VERBOSE\nHAS_POINT_RELEASE=$HAS_POINT_RELEASE\nTARGET_NAME=$TARGET_NAME\nSYNC_URL=$SYNC_URL\nTARGET_VERSION=$TARGET_VERSION\nTARGET_ARCH=$TARGET_ARCH\nTARGET_EXCLUDE=( ${TARGET_EXCLUDE[*]} )\nAUTO_UPDATE_POINT_RELEASE=$AUTO_UPDATE_POINT_RELEASE\nDRYRUN=$DRYRUN\nRETAIN_OLD_VERSIONS=$RETAIN_OLD_VERSIONS\nKEEP_VAULT=$KEEP_VAULT" > $TARGET_CONFIGURATION_FILE`
 	verbose $O
 	return 0;
 }
@@ -354,6 +362,7 @@ run_cmd() {
 	if [ ! -z "$DRYRUN" -a "$DRYRUN" == "yes" ]; then
 		echo "Would execute command: $1"
 	else
+        verbose "debug" "Execute command: $1"
 		CMD_OUTPUT=$( $1 2>&1 )
 
 		if [ ! -z "$2" ]; then
@@ -391,7 +400,7 @@ get_configurations
 for TARGET_CONFIGURATION_FILE in $CONFIGURATION_FILES; do 
 load_defaults
 source $TARGET_CONFIGURATION_FILE
-verbose  "Repo in $TARGET_CONFIGURATION_FILE is $TARGET_NAME $TARGET_VERSION $TARGET_ARCH"; 
+verbose  "Repo in $TARGET_CONFIGURATION_FILE is $TARGET_NAME $TARGET_VERSION $TARGET_ARCH stored locally at $REPOS_PATH"; 
 sanity_check
 LOOP=0
 
