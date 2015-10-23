@@ -63,6 +63,7 @@ is_depreciated_rsync() {
 
 # The following function(s) should set a string variable named SYNC_CMD with the command to run in order to synchronize the target.
 # If the first argument is "dryrun" then the function should always produce a command which will not actually perform the action.
+# the s
 # Function name should be build_$SCHEME_cmd
 
 build_rsync_cmd() {
@@ -107,6 +108,41 @@ next_point_release_CentOS5() {
 	next_point_release_CentOS "mv $TARGET_REPO_PATH/updates/\$ARCH/RPMS/* $TARGET_REPO_PATH/os/\$ARCH/CentOS/"
 }
 
+post_commands_fedora() {
+
+	#Syncs repodata directory and creates links to Everything Packages dir
+
+	#these 2 vars should be moved to conf file 
+	FEDORA_EXCLUDE_FROM_FLAVORS=( Packages LiveOS EFI isolinux repoview images ) 	
+	FEDORA_MAINTAIN_FLAVORS=( Server Workstation )
+
+	if [ -z "$FEDORA_MAINTAIN_FLAVORS" ]; then
+		return 0;
+	fi
+
+	local TVSAVE=$TARGET_VERSION
+	local TEXCLUDE=( ${TARGET_EXCLUDE[@]} )
+	TARGET_EXCLUDE+=( ${FEDORA_EXCLUDE_FROM_FLAVORS[@]} )
+
+	for v in ${FEDORA_MAINTAIN_FLAVORS[*]}; do
+		TARGET_VERSION="$TVSAVE/$v"
+		local TR="$REPOS_PATH/$TARGET_NAME/$TARGET_VERSION/$TARGET_ARCH/os/"
+		mkdir -p $TR
+		build_sync_cmd
+		run_cmd "$SYNC_CMD" "debug"
+		# create link to packages
+		if [ ! -d $TR/Packages ];  then
+			ln -s $REPOS_PATH/$TARGET_NAME/$TVSAVE/Everything/$TARGET_ARCH/os/Packages $TR
+		fi
+	done;
+
+
+	TARGET_VERSION=$TVSAVE
+	TARGET_EXCLUDE=( ${TEXCLUDE[@]}  )
+
+	
+}
+
 # end
 
 # Do not change anything below this line unless you really want to.
@@ -134,6 +170,7 @@ next_point_release_CentOS() {
 		eval_cmd "$1"
 	done;
 	
+
 }
 
 build_sync_cmd() {
@@ -227,7 +264,7 @@ next_point_release() {
 
 sanity_check() {
 
-    if [ "HAS_POINT_RELEASE" == "yes" ]; then
+    if [ "$HAS_POINT_RELEASE" == "yes" ]; then
 	    TARGET_VERSION=`echo $TARGET_VERSION+0.0 | bc`
     fi
 	var_check SYNC_URL
@@ -400,6 +437,22 @@ safe_exit() {
         fi
 }
 
+run_post() {
+	local C="post_commands_$TARGET_NAME"
+	type $C &> /dev/null
+
+	if [ "$?" -gt "0" ]; then
+        	verbose "No post sync commands specified."
+	else
+		$C
+	fi
+}
+
+if [ ! -z "$SOURCEMODE" ]; then
+	verbose "Source mode on"
+	return 0;
+fi 
+
 lock_instance
 trap 'on_die' INT TERM EXIT
 get_configurations
@@ -426,6 +479,9 @@ build_sync_cmd
 run_cmd "$SYNC_CMD" "debug"
 
 save_configuration
+
+run_post
+
 done
 unlock_instance
 trap - INT TERM EXIT

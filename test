@@ -1,0 +1,7 @@
+#!/bin/bash
+
+SOURCEMODE=1
+source reposync/reposync
+source /home/repo/.config/reposync/fedora22.sync
+decode_url
+run_post
